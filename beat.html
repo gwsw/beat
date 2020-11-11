@@ -1,0 +1,222 @@
+<!doctype html>
+<html>
+<head>
+<title>Rhythm Practice</title>
+
+<style>
+body { font: 14pt 'Alike', sans-serif;}
+</style>
+
+</head>
+<body onload="init()">
+
+<canvas id="canvas" width="1" height="1"></canvas>
+<button onclick="reset()">Reset</button>
+
+<script>
+
+const max_bangs          = 10;
+const bang_limit         = 0.2;
+const shortest_bang      = 200;
+const max_delta          = 40;
+const black_color        = "#000000";
+const white_color        = "#ffffff";
+var bangs = [];
+var beat_ms = 0;
+var work_node = null;
+var proc_node = null;
+var audioContext = null;
+var canvas;
+var font_size;
+var reset_time = now();
+
+function init() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("Sorry, your browser does not support getUserMedia");
+        return;
+    }
+    canvas = document.getElementById("canvas");
+    canvas.width = window.innerWidth -20;
+    canvas.height = window.innerHeight -50;
+    canvas.addEventListener('mousedown', canvas_mousepress, false);
+    update();
+}
+
+function canvas_mousepress(e) {
+    if (audioContext != null) return;
+    setupAudio();
+    update();
+}
+
+async function setupAudio() {
+    window.AudioContext = window.AudioContext || window.webkitAudioContext;
+    audioContext = new AudioContext();
+    audioContext.resume();
+
+    let dev = await navigator.mediaDevices.getUserMedia({audio:true});
+    if (dev == null || dev.deviceId == '') {
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        let devid = null;
+        for (let i = 0; i < devs.length; ++i) {
+            if (devs[i].kind == 'audioinput') {
+                devid = devs[i].deviceId;
+                break;
+            }
+        }
+        if (devid == null) {
+            alert("No microphone found.");
+            return;
+        }
+alert("devid "+devid);
+        dev = await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:devid}}});
+    }
+    let source = audioContext.createMediaStreamSource(dev);
+    if (false) {
+        work_node = new AudioWorkletNode(audioContext, 'audio-processor');
+        work_node.connect(audioContext.destination);
+        source.connect(work_node);
+    } else {
+//alert("4");
+        proc_node = audioContext.createScriptProcessor(256, 1, 1);
+//if (proc_node) alert("ok"); else alert("no");
+        proc_node.onaudioprocess = process_audio;
+        proc_node.connect(audioContext.destination);
+        source.connect(proc_node);
+    }
+}
+
+function reset() {
+    reset_time = now();
+    bangs.length = 0;
+    beat_ms = 0;
+}
+
+function update() {
+    let ctx = get_ctx();
+    let cw = ctx.canvas.width;
+    let ch = ctx.canvas.height;
+    ctx.clearRect(0, 0, cw, ch);
+    draw_rect(ctx, 0, 0, cw, ch, black_color);
+    if (audioContext == null) {
+        let text = "Click to begin.";
+        let m = measure_text(ctx, text, 40, "Arial");
+        draw_text(ctx, text, (cw-m.width)/2, (ch-m.height)/2, white_color);
+        return;
+    }
+    if (work_node != null) 
+        check_bang(work_node.get_bang());
+    let bpm = get_bpm().toString();
+    let m = measure_text(ctx, bpm, 40, "Arial");
+    let xmargin = Math.floor(cw / 40);
+    let ymargin = Math.floor(ch / 40);
+    let ty = ymargin + m.height;
+    draw_text(ctx, bpm, xmargin, ty, white_color);
+    ty += 20; // FIXME
+    let midy = (ch + ty - ymargin) / 2;
+    let maxy = midy - ty;
+    draw_rect(ctx, xmargin, midy, cw-2*xmargin, 2, "#d8d8d8");
+    for (let i = 1; i < bangs.length; ++i) {
+        let dur = bangs[i] - bangs[i-1];
+        let frac = (beat_ms - dur) / max_delta;
+        if (frac > 1) frac = 1;
+        if (frac < -1) frac = -1;
+        let bh = maxy * frac;
+        let bw = 8;
+        let color = mkcolor(fade({r:0,g:255,b:0}, {r:255,g:0,b:0}, Math.abs(frac)));
+        if (frac < 0) {
+            draw_rect(ctx, xmargin + 20*i, midy+bh, bw, -bh, color);
+        } else {
+            draw_rect(ctx, xmargin + 20*i, midy, bw, bh, color);
+        }
+    }
+    window.requestAnimationFrame(update);
+}
+
+function process_audio(e) {
+    let input = e.inputBuffer;
+    for (let c = 0; c < input.numberOfChannels; ++c) {
+        let data = input.getChannelData(c);
+        check_bang(calc_bang(data));
+    }
+}
+
+function check_bang(bang) {
+    if (bang < bang_limit) return;
+    let tm = now();
+    let last_bang = (bangs.length > 0) ? bangs[bangs.length-1] : reset_time;
+    if (tm - last_bang < shortest_bang) return;
+    bangs.push(tm);
+    while (bangs.length > max_bangs)
+        bangs.splice(0,1);
+    if (bangs.length < 2) return;
+    let tot = 0;
+    for (let i = 1; i < bangs.length; ++i)
+        tot += bangs[i] - bangs[i-1];
+    beat_ms = tot / (bangs.length-1);
+}
+
+function calc_bang(chan) {
+    let bang = 0;
+    for (let b = 0; b < chan.length; b++)
+        if (chan[b] > bang)
+            bang = chan[b];
+    return bang;
+}
+
+function get_bpm() {
+    if (beat_ms == 0) return 0;
+    let bpm = 60*1000 / beat_ms;
+    bpm = Math.floor(10*bpm) / 10;
+    return bpm;
+}
+
+function get_ctx() {
+    var canvas = document.getElementById("canvas");
+    return canvas.getContext("2d");
+}
+
+function mkcolor(color) {
+    var rx = ("0"+color.r.toString(16)).substr(-2);
+    var gx = ("0"+color.g.toString(16)).substr(-2);
+    var bx = ("0"+color.b.toString(16)).substr(-2);
+    return "#"+rx+gx+bx;
+}
+
+function fade(color1, color2, frac) {
+    return {
+        r: color1.r + Math.floor((color2.r - color1.r) * frac),
+        g: color1.g + Math.floor((color2.g - color1.g) * frac),
+        b: color1.b + Math.floor((color2.b - color1.b) * frac) };
+}
+
+function draw_rect(ctx, x, y, w, h, color) {
+    if (color != undefined) ctx.fillStyle = color;
+    ctx.fillRect(x, y, w, h);
+}
+
+function draw_text(ctx, text, x, y, color, fontsize, fontname) {
+    set_font(ctx, fontsize, fontname);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y); //FIXME y baseline weirdness
+}
+
+function measure_text(ctx, str, fontsize, fontname) {
+    set_font(ctx, fontsize, fontname);
+    var m = ctx.measureText(str);
+    return { width: m.width, height: fontsize*.9 }; // FIXME
+}
+
+function set_font(ctx, fontsize, fontname) {
+    if (fontsize == undefined || fontsize == 0) return;
+    if (fontname == undefined || fontname == '') fontname = 'sans-serif';
+    ctx.font = fontsize.toString()+'px '+fontname;
+}
+
+function now() {
+    return (new Date()).getTime();
+}
+</script>
+
+
+</body>
+</html>
