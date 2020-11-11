@@ -3,10 +3,6 @@
 <head>
 <title>Rhythm Practice</title>
 
-<style>
-body { font: 14pt 'Alike', sans-serif;}
-</style>
-
 </head>
 <body onload="init()">
 
@@ -26,8 +22,6 @@ var beat_ms = 0;
 var work_node = null;
 var proc_node = null;
 var audioContext = null;
-var canvas;
-var font_size;
 var reset_time = now();
 
 function init() {
@@ -35,16 +29,23 @@ function init() {
         alert("Sorry, your browser does not support getUserMedia");
         return;
     }
-    canvas = document.getElementById("canvas");
-    canvas.width = window.innerWidth -20;
-    canvas.height = window.innerHeight -50;
+    let canvas = canvas_resize();
     canvas.addEventListener('mousedown', canvas_mousepress, false);
+    window.addEventListener('resize', canvas_resize, false);
     update();
 }
 
+function canvas_resize() {
+    let canvas = document.getElementById("canvas");
+    canvas.width = window.innerWidth -20;
+    canvas.height = window.innerHeight -20;
+    return canvas;
+}
+
 function canvas_mousepress(e) {
-    if (audioContext != null) return;
-    setupAudio();
+    if (audioContext == null)
+        setupAudio();
+    reset();
     update();
 }
 
@@ -52,7 +53,6 @@ async function setupAudio() {
     window.AudioContext = window.AudioContext || window.webkitAudioContext;
     audioContext = new AudioContext();
     audioContext.resume();
-
     let dev = await navigator.mediaDevices.getUserMedia({audio:true});
     if (dev == null || dev.deviceId == '') {
         const devs = await navigator.mediaDevices.enumerateDevices();
@@ -67,7 +67,6 @@ async function setupAudio() {
             alert("No microphone found.");
             return;
         }
-alert("devid "+devid);
         dev = await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:devid}}});
     }
     let source = audioContext.createMediaStreamSource(dev);
@@ -76,9 +75,7 @@ alert("devid "+devid);
         work_node.connect(audioContext.destination);
         source.connect(work_node);
     } else {
-//alert("4");
         proc_node = audioContext.createScriptProcessor(256, 1, 1);
-//if (proc_node) alert("ok"); else alert("no");
         proc_node.onaudioprocess = process_audio;
         proc_node.connect(audioContext.destination);
         source.connect(proc_node);
@@ -92,6 +89,8 @@ function reset() {
 }
 
 function update() {
+    if (work_node != null) 
+        check_bang(work_node.get_bang());
     let ctx = get_ctx();
     let cw = ctx.canvas.width;
     let ch = ctx.canvas.height;
@@ -99,37 +98,73 @@ function update() {
     draw_rect(ctx, 0, 0, cw, ch, black_color);
     if (audioContext == null) {
         let text = "Click to begin.";
-        let m = measure_text(ctx, text, 40, "Arial");
+        let font_size = (cw > ch) ? ch/8 : cw/12;
+        let m = measure_text(ctx, text, font_size, "Arial");
         draw_text(ctx, text, (cw-m.width)/2, (ch-m.height)/2, white_color);
-        return;
-    }
-    if (work_node != null) 
-        check_bang(work_node.get_bang());
-    let bpm = get_bpm().toString();
-    let m = measure_text(ctx, bpm, 40, "Arial");
-    let xmargin = Math.floor(cw / 40);
-    let ymargin = Math.floor(ch / 40);
-    let ty = ymargin + m.height;
-    draw_text(ctx, bpm, xmargin, ty, white_color);
-    ty += 20; // FIXME
-    let midy = (ch + ty - ymargin) / 2;
-    let maxy = midy - ty;
-    draw_rect(ctx, xmargin, midy, cw-2*xmargin, 2, "#d8d8d8");
-    for (let i = 1; i < bangs.length; ++i) {
-        let dur = bangs[i] - bangs[i-1];
-        let frac = (beat_ms - dur) / max_delta;
-        if (frac > 1) frac = 1;
-        if (frac < -1) frac = -1;
-        let bh = maxy * frac;
-        let bw = 8;
-        let color = mkcolor(fade({r:0,g:255,b:0}, {r:255,g:0,b:0}, Math.abs(frac)));
-        if (frac < 0) {
-            draw_rect(ctx, xmargin + 20*i, midy+bh, bw, -bh, color);
-        } else {
-            draw_rect(ctx, xmargin + 20*i, midy, bw, bh, color);
-        }
+    } else if (cw > ch) {
+        update_landscape(ctx, cw, ch);
+    } else {
+        update_portrait(ctx, cw, ch);
     }
     window.requestAnimationFrame(update);
+}
+
+function update_landscape(ctx, cw, ch) {
+    let xmargin = Math.floor(cw / 40);
+    let ymargin = Math.floor(ch / 40);
+    let font_size = ch/6;
+    let m = measure_text(ctx, "WWWW.W", font_size, "Arial");
+    let panelw = m.width;
+    let bpm = get_bpm().toString();
+    m = measure_text(ctx, bpm, font_size);
+    draw_text(ctx, bpm, xmargin, (ch+m.height)/2, white_color);
+    let midy = ch / 2;
+    let maxy = midy - ymargin;
+    let gw = cw - panelw - 2*xmargin;
+    let bw = 8;
+    let x = xmargin + panelw;
+    draw_rect(ctx, x, midy, gw, 2, "#505050");
+    if (bangs.length < 2) return;
+    let xstep = (gw / (bangs.length-1)) - bw;
+    for (let i = 1; i < bangs.length; ++i, x += xstep) {
+        let frac = bang_frac(i);
+        let bh = maxy * frac;
+        let color = mkcolor(fade({r:0,g:255,b:0}, {r:255,g:0,b:0}, Math.abs(frac)));
+        draw_rect(ctx, x, midy+((bh<0)?bh:0), bw, Math.abs(bh), color);
+    }
+}
+
+function update_portrait(ctx, cw, ch) {
+    let xmargin = Math.floor(cw / 40);
+    let ymargin = Math.floor(ch / 40);
+    let font_size = cw/6;
+    let m = measure_text(ctx, "WWWW.W", font_size, "Arial");
+    let panelh = Math.floor(m.height * 1.7);
+    let bpm = get_bpm().toString();
+    m = measure_text(ctx, bpm, font_size);
+    draw_text(ctx, bpm, (cw-m.width)/2, ymargin+m.height, white_color);
+    let midx = cw / 2;
+    let maxx = midx - xmargin;
+    let gh = ch - panelh - 2*ymargin;
+    let bh = 8;
+    let y = ymargin + panelh;
+    draw_rect(ctx, midx, y, 2, gh, "#505050");
+    if (bangs.length < 2) return;
+    let ystep = (gh / (bangs.length-1)) - bh;
+    for (let i = 1; i < bangs.length; ++i, y += ystep) {
+        let frac = bang_frac(i);
+        let bw = maxx * frac;
+        let color = mkcolor(fade({r:0,g:255,b:0}, {r:255,g:0,b:0}, Math.abs(frac)));
+        draw_rect(ctx, midx+((bw<0)?bw:0), y, Math.abs(bw), bh, color);
+    }
+}
+
+function bang_frac(i) {
+    let dur = bangs[i] - bangs[i-1];
+    let frac = (beat_ms - dur) / max_delta;
+    if (frac > 1) frac = 1;
+    if (frac < -1) frac = -1;
+    return frac;
 }
 
 function process_audio(e) {
