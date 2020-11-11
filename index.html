@@ -7,22 +7,24 @@
 <body onload="init()">
 
 <canvas id="canvas" width="1" height="1"></canvas>
-<button onclick="reset()">Reset</button>
 
 <script>
 
 const max_bangs          = 10;
 const bang_limit         = 0.2;
-const shortest_bang      = 200;
+const shortest_bang      = 120;
 const max_delta          = 40;
+const bang_light_dur     = 17;
 const black_color        = "#000000";
 const white_color        = "#ffffff";
+
 var bangs = [];
 var beat_ms = 0;
-var work_node = null;
+////var work_node = null;
 var proc_node = null;
 var audioContext = null;
 var reset_time = now();
+var recent_bang = 0;
 
 function init() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -32,7 +34,7 @@ function init() {
     let canvas = canvas_resize();
     canvas.addEventListener('mousedown', canvas_mousepress, false);
     window.addEventListener('resize', canvas_resize, false);
-    update();
+    draw();
 }
 
 function canvas_resize() {
@@ -46,7 +48,7 @@ function canvas_mousepress(e) {
     if (audioContext == null)
         setupAudio();
     reset();
-    update();
+    draw();
 }
 
 async function setupAudio() {
@@ -70,11 +72,12 @@ async function setupAudio() {
         dev = await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:devid}}});
     }
     let source = audioContext.createMediaStreamSource(dev);
-    if (false) {
-        work_node = new AudioWorkletNode(audioContext, 'audio-processor');
-        work_node.connect(audioContext.destination);
-        source.connect(work_node);
-    } else {
+    ////if (false) {
+    ////    work_node = new AudioWorkletNode(audioContext, 'audio-processor');
+    ////    work_node.connect(audioContext.destination);
+    ////    source.connect(work_node);
+    ////} else
+    {
         proc_node = audioContext.createScriptProcessor(256, 1, 1);
         proc_node.onaudioprocess = process_audio;
         proc_node.connect(audioContext.destination);
@@ -88,36 +91,40 @@ function reset() {
     beat_ms = 0;
 }
 
-function update() {
-    if (work_node != null) 
-        check_bang(work_node.get_bang());
+function draw() {
+    ////if (work_node != null) 
+    ////    check_bang(work_node.get_bang());
     let ctx = get_ctx();
     let cw = ctx.canvas.width;
     let ch = ctx.canvas.height;
     ctx.clearRect(0, 0, cw, ch);
     draw_rect(ctx, 0, 0, cw, ch, black_color);
     if (audioContext == null) {
+        // Chrome requires user click before new AudioContext.
         let text = "Click to begin.";
         let font_size = (cw > ch) ? ch/8 : cw/12;
         let m = measure_text(ctx, text, font_size, "Arial");
         draw_text(ctx, text, (cw-m.width)/2, (ch-m.height)/2, white_color);
     } else if (cw > ch) {
-        update_landscape(ctx, cw, ch);
+        draw_landscape(ctx, cw, ch);
     } else {
-        update_portrait(ctx, cw, ch);
+        draw_portrait(ctx, cw, ch);
     }
-    window.requestAnimationFrame(update);
+    window.requestAnimationFrame(draw);
 }
 
-function update_landscape(ctx, cw, ch) {
+function draw_landscape(ctx, cw, ch) {
     let xmargin = Math.floor(cw / 40);
     let ymargin = Math.floor(ch / 40);
     let font_size = ch/6;
-    let m = measure_text(ctx, "WWWW.W", font_size, "Arial");
+    let m = measure_text(ctx, "888.8a", font_size, "Arial");
     let panelw = m.width;
     let bpm = get_bpm().toString();
     m = measure_text(ctx, bpm, font_size);
-    draw_text(ctx, bpm, xmargin, (ch+m.height)/2, white_color);
+    let y = (ch+m.height)/2; 
+    draw_text(ctx, bpm, xmargin, y, white_color);
+    let lr = font_size/3;
+    draw_bang_light(ctx, xmargin+lr, ymargin+lr, lr);
     let midy = ch / 2;
     let maxy = midy - ymargin;
     let gw = cw - panelw - 2*xmargin;
@@ -129,34 +136,45 @@ function update_landscape(ctx, cw, ch) {
     for (let i = 1; i < bangs.length; ++i, x += xstep) {
         let frac = bang_frac(i);
         let bh = maxy * frac;
-        let color = mkcolor(fade({r:0,g:255,b:0}, {r:255,g:0,b:0}, Math.abs(frac)));
-        draw_rect(ctx, x, midy+((bh<0)?bh:0), bw, Math.abs(bh), color);
+        draw_rect(ctx, x, midy+((bh<0)?bh:0), bw, Math.abs(bh), bang_color(frac));
     }
 }
 
-function update_portrait(ctx, cw, ch) {
+function draw_portrait(ctx, cw, ch) {
     let xmargin = Math.floor(cw / 40);
     let ymargin = Math.floor(ch / 40);
     let font_size = cw/6;
-    let m = measure_text(ctx, "WWWW.W", font_size, "Arial");
-    let panelh = Math.floor(m.height * 1.7);
+    let m = measure_text(ctx, "8", font_size, "Arial"); // just need height
+    let r = font_size / 3;
+    let panelh = Math.floor(m.height * 1.7) + 2*r;
     let bpm = get_bpm().toString();
     m = measure_text(ctx, bpm, font_size);
-    draw_text(ctx, bpm, (cw-m.width)/2, ymargin+m.height, white_color);
+    let y = ymargin+m.height; 
+    draw_text(ctx, bpm, (cw-m.width)/2, y, white_color);
+    let lr = font_size/3;
+    draw_bang_light(ctx, xmargin+lr, ymargin+lr, lr);
     let midx = cw / 2;
     let maxx = midx - xmargin;
     let gh = ch - panelh - 2*ymargin;
     let bh = 8;
-    let y = ymargin + panelh;
+    y = ymargin + panelh;
     draw_rect(ctx, midx, y, 2, gh, "#505050");
     if (bangs.length < 2) return;
     let ystep = (gh / (bangs.length-1)) - bh;
     for (let i = 1; i < bangs.length; ++i, y += ystep) {
         let frac = bang_frac(i);
         let bw = maxx * frac;
-        let color = mkcolor(fade({r:0,g:255,b:0}, {r:255,g:0,b:0}, Math.abs(frac)));
-        draw_rect(ctx, midx+((bw<0)?bw:0), y, Math.abs(bw), bh, color);
+        draw_rect(ctx, midx+((bw<0)?bw:0), y, Math.abs(bw), bh, bang_color(frac));
     }
+}
+
+function draw_bang_light(ctx, x, y, r) {
+    if (now() - recent_bang > bang_light_dur) return;
+    draw_circle(ctx, x, y, r, white_color);
+}
+
+function bang_color(frac) {
+    return mkcolor(fade({r:0,g:255,b:0}, {r:255,g:0,b:0}, Math.abs(frac)));
 }
 
 function bang_frac(i) {
@@ -168,21 +186,22 @@ function bang_frac(i) {
 }
 
 function process_audio(e) {
+    let tm = now();
     let input = e.inputBuffer;
     for (let c = 0; c < input.numberOfChannels; ++c) {
-        let data = input.getChannelData(c);
-        check_bang(calc_bang(data));
+        let samp = input.getChannelData(c);
+        let bang_tm = bang_time(samp, tm);
+        record_bang(bang_tm);
     }
 }
 
-function check_bang(bang) {
-    if (bang < bang_limit) return;
-    let tm = now();
+function record_bang(bang_tm) {
     let last_bang = (bangs.length > 0) ? bangs[bangs.length-1] : reset_time;
-    if (tm - last_bang < shortest_bang) return;
-    bangs.push(tm);
+    if (bang_tm - last_bang < shortest_bang) return;
+    bangs.push(bang_tm);
+    recent_bang = bang_tm;
     while (bangs.length > max_bangs)
-        bangs.splice(0,1);
+        bangs.splice(0, 1);
     if (bangs.length < 2) return;
     let tot = 0;
     for (let i = 1; i < bangs.length; ++i)
@@ -190,12 +209,13 @@ function check_bang(bang) {
     beat_ms = tot / (bangs.length-1);
 }
 
-function calc_bang(chan) {
-    let bang = 0;
-    for (let b = 0; b < chan.length; b++)
-        if (chan[b] > bang)
-            bang = chan[b];
-    return bang;
+function bang_time(samp, tm) {
+    const samples_per_sec = 44100;
+    const samples_per_ms = samples_per_sec / 1000;
+    for (let b = 0; b < samp.length; b++)
+        if (samp[b] > bang_limit)
+            return tm - (samp.length - b) / samples_per_ms;
+    return 0;
 }
 
 function get_bpm() {
@@ -235,6 +255,13 @@ function draw_text(ctx, text, x, y, color, fontsize, fontname) {
     ctx.fillText(text, x, y); //FIXME y baseline weirdness
 }
 
+function draw_circle(ctx, x, y, r, color) {
+    ctx.beginPath();
+    ctx.fillStyle = color;
+    ctx.arc(x, y, r, 0, 2*Math.PI);
+    ctx.fill();
+}
+
 function measure_text(ctx, str, fontsize, fontname) {
     set_font(ctx, fontsize, fontname);
     var m = ctx.measureText(str);
@@ -248,10 +275,10 @@ function set_font(ctx, fontsize, fontname) {
 }
 
 function now() {
-    return (new Date()).getTime();
+    return performance.now();
+    //return (new Date()).getTime();
 }
 </script>
-
 
 </body>
 </html>
