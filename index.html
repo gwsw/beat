@@ -17,14 +17,59 @@ const max_delta          = 40;
 const bang_light_dur     = 17;
 const black_color        = "#000000";
 const white_color        = "#ffffff";
+const major_grid_color   = "#989898"
+const minor_grid_color   = "#707070"
 
-var bangs = [];
-var beat_ms = 0;
 ////var work_node = null;
 var proc_node = null;
 var audioContext = null;
 var reset_time = now();
-var recent_bang = 0;
+var bangs = null;
+
+class Bangs {
+constructor() {
+    this.bangs = [];
+    this.clear();
+}
+clear() {
+    this.bangs.length = 0;
+    this.latest_bang = 0;
+    this.beat_ms = 0;
+}
+count() {
+    return this.bangs.length;
+}
+most_recent() {
+    return this.latest_bang;
+}
+bpm() {
+    if (this.beat_ms == 0) return 0;
+    let b = 60*1000 / this.beat_ms;
+    b = Math.floor(10*b) / 10;
+    return b;
+}
+info(i) {
+    if (i == 0 || i >= this.bangs.length) return 0;
+    let delta = this.beat_ms - (this.bangs[i] - this.bangs[i-1]);
+    let frac = delta / max_delta;
+    if (frac > 1) frac = 1;
+    if (frac < -1) frac = -1;
+    return { frac:frac, delta:delta };
+}
+add(bang_tm) {
+    let last_bang = (this.bangs.length > 0) ? this.bangs[this.bangs.length-1] : reset_time;
+    if (bang_tm - last_bang < shortest_bang) return;
+    this.bangs.push(bang_tm);
+    this.latest_bang = bang_tm;
+    while (this.bangs.length > max_bangs)
+        this.bangs.splice(0, 1);
+    if (this.bangs.length < 2) return;
+    let tot = 0;
+    for (let i = 1; i < this.bangs.length; ++i)
+        tot += this.bangs[i] - this.bangs[i-1];
+    this.beat_ms = tot / (this.bangs.length-1);
+}
+}; // class Bangs
 
 function init() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -34,6 +79,7 @@ function init() {
     let canvas = canvas_resize();
     canvas.addEventListener('mousedown', canvas_mousepress, false);
     window.addEventListener('resize', canvas_resize, false);
+    bangs = new Bangs();
     draw();
 }
 
@@ -87,8 +133,7 @@ async function setupAudio() {
 
 function reset() {
     reset_time = now();
-    bangs.length = 0;
-    beat_ms = 0;
+    bangs.clear();
 }
 
 function draw() {
@@ -116,27 +161,37 @@ function draw() {
 function draw_landscape(ctx, cw, ch) {
     let xmargin = Math.floor(cw / 40);
     let ymargin = Math.floor(ch / 40);
-    let font_size = ch/6;
+    let font_size = Math.floor(ch/6);
+    let csh2 = Math.floor(ch/50); // center strip
     let m = measure_text(ctx, "888.8a", font_size, "Arial");
     let panelw = m.width;
-    let bpm = get_bpm().toString();
+    let bpm = bangs.bpm().toString();
     m = measure_text(ctx, bpm, font_size);
     let y = (ch+m.height)/2; 
     draw_text(ctx, bpm, xmargin, y, white_color);
     let lr = font_size/3;
     draw_bang_light(ctx, xmargin+lr, ymargin+lr, lr);
+
     let midy = ch / 2;
     let maxy = midy - ymargin;
     let gw = cw - panelw - 2*xmargin;
     let bw = 8;
     let x = xmargin + panelw;
-    draw_rect(ctx, x, midy, gw, 2, "#505050");
-    if (bangs.length < 2) return;
-    let xstep = (gw / (bangs.length-1)) - bw;
-    for (let i = 1; i < bangs.length; ++i, x += xstep) {
-        let frac = bang_frac(i);
-        let bh = maxy * frac;
-        draw_rect(ctx, x, midy+((bh<0)?bh:0), bw, Math.abs(bh), bang_color(frac));
+    draw_grid(ctx, x, midy, 0, csh2, 0, maxy/4, gw, 0);
+    if (bangs.count() < 2) return;
+    let xstep = (gw / (bangs.count()-1)) - bw;
+    for (let i = 1; i < bangs.count(); ++i, x += xstep) {
+        let info = bangs.info(i);
+        let color = bang_color(info.frac);
+        let bh = maxy * info.frac;
+        let delta = Math.floor(info.delta).toString();
+        let m = measure_text(ctx, delta, Math.floor(csh2*1.5), "monospace");
+        draw_text(ctx, delta, x, midy, white_color);
+        if (bh < 0) {
+            draw_rect(ctx, x, midy+bh-csh2, bw, -bh, color);
+        } else {
+            draw_rect(ctx, x, midy+csh2, bw, bh, color);
+        }
     }
 }
 
@@ -144,45 +199,66 @@ function draw_portrait(ctx, cw, ch) {
     let xmargin = Math.floor(cw / 40);
     let ymargin = Math.floor(ch / 40);
     let font_size = cw/6;
+    let csw2 = Math.floor(cw/18);
     let m = measure_text(ctx, "8", font_size, "Arial"); // just need height
     let r = font_size / 3;
     let panelh = Math.floor(m.height * 1.7) + 2*r;
-    let bpm = get_bpm().toString();
+    let bpm = bangs.bpm().toString();
     m = measure_text(ctx, bpm, font_size);
     let y = ymargin+m.height; 
     draw_text(ctx, bpm, (cw-m.width)/2, y, white_color);
     let lr = font_size/3;
     draw_bang_light(ctx, xmargin+lr, ymargin+lr, lr);
+
     let midx = cw / 2;
     let maxx = midx - xmargin;
     let gh = ch - panelh - 2*ymargin;
     let bh = 8;
     y = ymargin + panelh;
-    draw_rect(ctx, midx, y, 2, gh, "#505050");
-    if (bangs.length < 2) return;
-    let ystep = (gh / (bangs.length-1)) - bh;
-    for (let i = 1; i < bangs.length; ++i, y += ystep) {
-        let frac = bang_frac(i);
-        let bw = maxx * frac;
-        draw_rect(ctx, midx+((bw<0)?bw:0), y, Math.abs(bw), bh, bang_color(frac));
+    draw_grid(ctx, midx, y, csw2, 0, maxx/4, 0, 0, gh);
+    if (bangs.count() < 2) return;
+    let ystep = (gh / (bangs.count()-1)) - bh;
+    for (let i = 1; i < bangs.count(); ++i, y += ystep) {
+        let info = bangs.info(i);
+        let color = bang_color(info.frac);
+        let bw = maxx * info.frac;
+        let delta = Math.floor(info.delta).toString();
+        let m = measure_text(ctx, delta, Math.floor(ch*.03), "monospace");
+        draw_text(ctx, delta, midx-m.width/2, y, white_color);
+        if (bw < 0) {
+            draw_rect(ctx, midx+bw-csw2, y, -bw, bh, color);
+        } else {
+            draw_rect(ctx, midx+csw2, y, bw, bh, color);
+        }
     }
 }
 
+function draw_grid(ctx,x,y,xi,yi,dxi,dyi,gw,gh) {
+    draw_rect(ctx, x+xi, y+yi, gw?gw:1, gh?gh:1, major_grid_color);
+    draw_rect(ctx, x-xi, y-yi, gw?gw:1, gh?gh:1, major_grid_color);
+    ctx.beginPath();
+    ctx.setLineDash([10,4]);
+    ctx.strokeStyle = minor_grid_color;
+    for (let i = 1; i < 4; ++i) {
+        xi += dxi;
+        yi += dyi;
+        ctx.moveTo(x+xi, y+yi);
+        ctx.lineTo(x+xi+gw, y+yi+gh);
+        ctx.stroke();
+        ctx.moveTo(x-xi, y-yi);
+        ctx.lineTo(x-xi+gw, y-yi+gh);
+        ctx.stroke();
+    }
+    ctx.setLineDash([]);
+}
+
 function draw_bang_light(ctx, x, y, r) {
-    if (now() - recent_bang > bang_light_dur) return;
+    if (now() - bangs.most_recent() > bang_light_dur) return;
     draw_circle(ctx, x, y, r, white_color);
 }
 
 function bang_color(frac) {
     return mkcolor(fade({r:0,g:255,b:0}, {r:255,g:0,b:0}, Math.abs(frac)));
-}
-
-function bang_frac(i) {
-    let dur = bangs[i] - bangs[i-1];
-    let frac = (beat_ms - dur) / max_delta;
-    if (frac > 1) frac = 1;
-    if (frac < -1) frac = -1;
-    return frac;
 }
 
 function process_audio(e) {
@@ -191,22 +267,8 @@ function process_audio(e) {
     for (let c = 0; c < input.numberOfChannels; ++c) {
         let samp = input.getChannelData(c);
         let bang_tm = bang_time(samp, tm);
-        record_bang(bang_tm);
+        bangs.add(bang_tm);
     }
-}
-
-function record_bang(bang_tm) {
-    let last_bang = (bangs.length > 0) ? bangs[bangs.length-1] : reset_time;
-    if (bang_tm - last_bang < shortest_bang) return;
-    bangs.push(bang_tm);
-    recent_bang = bang_tm;
-    while (bangs.length > max_bangs)
-        bangs.splice(0, 1);
-    if (bangs.length < 2) return;
-    let tot = 0;
-    for (let i = 1; i < bangs.length; ++i)
-        tot += bangs[i] - bangs[i-1];
-    beat_ms = tot / (bangs.length-1);
 }
 
 function bang_time(samp, tm) {
@@ -216,13 +278,6 @@ function bang_time(samp, tm) {
         if (samp[b] > bang_limit)
             return tm - (samp.length - b) / samples_per_ms;
     return 0;
-}
-
-function get_bpm() {
-    if (beat_ms == 0) return 0;
-    let bpm = 60*1000 / beat_ms;
-    bpm = Math.floor(10*bpm) / 10;
-    return bpm;
 }
 
 function get_ctx() {
