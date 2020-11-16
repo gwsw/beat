@@ -10,18 +10,17 @@
 
 <script>
 
-const max_bangs          = 10;
+const avg_bangs          = 10;
+const max_bangs          = 30;
 const bang_limit         = 0.2;
 const shortest_bang      = 120;
-const max_delta          = 40;
+const max_offby          = 40;
 const bang_light_dur     = 17;
 const black_color        = "#000000";
 const white_color        = "#ffffff";
 const major_grid_color   = "#989898"
 const minor_grid_color   = "#707070"
 
-////var work_node = null;
-var proc_node = null;
 var audioContext = null;
 var reset_time = now();
 var bangs = null;
@@ -49,25 +48,50 @@ bpm() {
     return b;
 }
 info(i) {
-    if (i == 0 || i >= this.bangs.length) return 0;
-    let delta = this.beat_ms - (this.bangs[i] - this.bangs[i-1]);
-    let frac = delta / max_delta;
-    if (frac > 1) frac = 1;
-    if (frac < -1) frac = -1;
-    return { frac:frac, delta:delta };
+    return (i == 0 || i >= this.bangs.length) ? null : this.bangs[i];
 }
 add(bang_tm) {
-    let last_bang = (this.bangs.length > 0) ? this.bangs[this.bangs.length-1] : reset_time;
+    let last_bang = (this.bangs.length > 0) ? this.bangs[this.bangs.length-1].time : reset_time;
     if (bang_tm - last_bang < shortest_bang) return;
-    this.bangs.push(bang_tm);
     this.latest_bang = bang_tm;
-    while (this.bangs.length > max_bangs)
-        this.bangs.splice(0, 1);
-    if (this.bangs.length < 2) return;
-    let tot = 0;
-    for (let i = 1; i < this.bangs.length; ++i)
-        tot += this.bangs[i] - this.bangs[i-1];
-    this.beat_ms = tot / (this.bangs.length-1);
+
+    let offby = max_offby;
+    let mult = 1;
+    if (this.bangs.length > 0) {
+        let num_bangs = Math.min(this.bangs.length, avg_bangs);
+        let dur = bang_tm - this.bangs[this.bangs.length-1].time;
+        let tot = dur;
+        for (let i = 1; i < num_bangs; ++i)
+            tot += this.bangs[i].time - this.bangs[i-1].time;
+        this.beat_ms = tot / num_bangs;
+        let mults = [ 1, .5, .25, 2, 3, 4 ];
+        let small = this.beat_ms/16;
+        for (let m = 0; m < mults.length; ++m) {
+            let m1 = mults[m];
+            let diff = dur - this.beat_ms*m1;
+            if (Math.abs(diff) < small) {
+                mult = m1;
+                offby = diff;
+                break;
+            }
+        }
+        if (mult > 1) {
+            let tm = this.bangs[this.bangs.length-1].time;
+            for (let i = 0; i < mult-1; ++i) {
+                tm += dur/mult;
+                this.push_info(tm, 1, 0, true);
+            }
+        }
+    }
+    this.push_info(bang_tm, 1/mult, offby, false);
+    if (this.bangs.length > max_bangs)
+        this.bangs.splice(0, this.bangs.length - max_bangs);
+}
+push_info(tm, mult, offby, fake) {
+    let frac = offby / max_offby;
+    if (frac > 1) frac = 1;
+    if (frac < -1) frac = -1;
+    this.bangs.push({ time:tm, mult:mult, offby:offby, frac:frac, fake:fake });
 }
 }; // class Bangs
 
@@ -118,17 +142,10 @@ async function setupAudio() {
         dev = await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:devid}}});
     }
     let source = audioContext.createMediaStreamSource(dev);
-    ////if (false) {
-    ////    work_node = new AudioWorkletNode(audioContext, 'audio-processor');
-    ////    work_node.connect(audioContext.destination);
-    ////    source.connect(work_node);
-    ////} else
-    {
-        proc_node = audioContext.createScriptProcessor(256, 1, 1);
-        proc_node.onaudioprocess = process_audio;
-        proc_node.connect(audioContext.destination);
-        source.connect(proc_node);
-    }
+    let proc_node = audioContext.createScriptProcessor(256, 1, 1);
+    proc_node.onaudioprocess = process_audio;
+    proc_node.connect(audioContext.destination);
+    source.connect(proc_node);
 }
 
 function reset() {
@@ -137,8 +154,6 @@ function reset() {
 }
 
 function draw() {
-    ////if (work_node != null) 
-    ////    check_bang(work_node.get_bang());
     let ctx = get_ctx();
     let cw = ctx.canvas.width;
     let ch = ctx.canvas.height;
@@ -146,19 +161,16 @@ function draw() {
     draw_rect(ctx, 0, 0, cw, ch, black_color);
     if (audioContext == null) {
         // Chrome requires user click before new AudioContext.
-        let text = "Click to begin.";
-        let font_size = (cw > ch) ? ch/8 : cw/12;
-        let m = measure_text(ctx, text, font_size, "Arial");
-        draw_text(ctx, text, (cw-m.width)/2, (ch-m.height)/2, white_color);
-    } else if (cw > ch) {
-        draw_landscape(ctx, cw, ch);
+        draw_center_paragraph(ctx, ["Click to begin."], 0, ch/8, cw, white_color, ch/12, "Arial");
+    } else if (cw < ch) {
+        draw_center_paragraph(ctx, ["Hold phone","sideways."], 0, ch/8, cw, white_color, ch/12, "Arial");
     } else {
-        draw_portrait(ctx, cw, ch);
+        draw_ui(ctx, cw, ch);
     }
     window.requestAnimationFrame(draw);
 }
 
-function draw_landscape(ctx, cw, ch) {
+function draw_ui(ctx, cw, ch) {
     let xmargin = Math.floor(cw / 40);
     let ymargin = Math.floor(ch / 40);
     let font_size = Math.floor(ch/6);
@@ -178,57 +190,19 @@ function draw_landscape(ctx, cw, ch) {
     let bw = 8;
     let x = xmargin + panelw;
     draw_grid(ctx, x, midy, 0, csh2, 0, maxy/4, gw, 0);
-    if (bangs.count() < 2) return;
-    let xstep = (gw / (bangs.count()-1)) - bw;
+
+    let xstep = gw / (max_bangs-1);
     for (let i = 1; i < bangs.count(); ++i, x += xstep) {
         let info = bangs.info(i);
         let color = bang_color(info.frac);
         let bh = maxy * info.frac;
-        let delta = Math.floor(info.delta).toString();
-        let m = measure_text(ctx, delta, Math.floor(csh2*1.5), "monospace");
-        draw_text(ctx, delta, x, midy, white_color);
+        let offby = Math.floor(info.offby).toString();
+        let m = measure_text(ctx, offby, Math.floor(csh2*1.5), "monospace");
+        draw_text(ctx, offby, x, midy, white_color);
         if (bh < 0) {
             draw_rect(ctx, x, midy+bh-csh2, bw, -bh, color);
         } else {
             draw_rect(ctx, x, midy+csh2, bw, bh, color);
-        }
-    }
-}
-
-function draw_portrait(ctx, cw, ch) {
-    let xmargin = Math.floor(cw / 40);
-    let ymargin = Math.floor(ch / 40);
-    let font_size = cw/6;
-    let csw2 = Math.floor(cw/18);
-    let m = measure_text(ctx, "8", font_size, "Arial"); // just need height
-    let r = font_size / 3;
-    let panelh = Math.floor(m.height * 1.7) + 2*r;
-    let bpm = bangs.bpm().toString();
-    m = measure_text(ctx, bpm, font_size);
-    let y = ymargin+m.height; 
-    draw_text(ctx, bpm, (cw-m.width)/2, y, white_color);
-    let lr = font_size/3;
-    draw_bang_light(ctx, xmargin+lr, ymargin+lr, lr);
-
-    let midx = cw / 2;
-    let maxx = midx - xmargin;
-    let gh = ch - panelh - 2*ymargin;
-    let bh = 8;
-    y = ymargin + panelh;
-    draw_grid(ctx, midx, y, csw2, 0, maxx/4, 0, 0, gh);
-    if (bangs.count() < 2) return;
-    let ystep = (gh / (bangs.count()-1)) - bh;
-    for (let i = 1; i < bangs.count(); ++i, y += ystep) {
-        let info = bangs.info(i);
-        let color = bang_color(info.frac);
-        let bw = maxx * info.frac;
-        let delta = Math.floor(info.delta).toString();
-        let m = measure_text(ctx, delta, Math.floor(ch*.03), "monospace");
-        draw_text(ctx, delta, midx-m.width/2, y, white_color);
-        if (bw < 0) {
-            draw_rect(ctx, midx+bw-csw2, y, -bw, bh, color);
-        } else {
-            draw_rect(ctx, midx+csw2, y, bw, bh, color);
         }
     }
 }
@@ -267,7 +241,7 @@ function process_audio(e) {
     for (let c = 0; c < input.numberOfChannels; ++c) {
         let samp = input.getChannelData(c);
         let bang_tm = bang_time(samp, tm);
-        bangs.add(bang_tm);
+        if (bang_tm > 0) bangs.add(bang_tm);
     }
 }
 
@@ -308,6 +282,15 @@ function draw_text(ctx, text, x, y, color, fontsize, fontname) {
     set_font(ctx, fontsize, fontname);
     ctx.fillStyle = color;
     ctx.fillText(text, x, y); //FIXME y baseline weirdness
+}
+
+function draw_center_paragraph(ctx, texts, x, y, w, color, font_size, font_name) {
+    for (let i = 0; i < texts.length; ++i) {
+        let text = texts[i];
+        let m = measure_text(ctx, text, font_size, font_name);
+        draw_text(ctx, text, x+(w-m.width)/2, y, color);
+        y += m.height + 6;
+    }
 }
 
 function draw_circle(ctx, x, y, r, color) {
