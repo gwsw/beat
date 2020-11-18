@@ -18,6 +18,7 @@ const max_offby          = 40;
 const bang_light_dur     = 17;
 const black_color        = "#000000";
 const white_color        = "#ffffff";
+const grey_color         = "#303030";
 const major_grid_color   = "#989898"
 const minor_grid_color   = "#707070"
 
@@ -55,22 +56,27 @@ add(bang_tm) {
     if (bang_tm - last_bang < shortest_bang) return;
     this.latest_bang = bang_tm;
 
-    let offby = max_offby;
-    let mult = 1;
-    if (this.bangs.length > 0) {
-        let num_bangs = Math.min(this.bangs.length, avg_bangs);
-        let dur = bang_tm - this.bangs[this.bangs.length-1].time;
-        let tot = dur;
-        for (let i = 1; i < num_bangs; ++i)
-            tot += this.bangs[i].time - this.bangs[i-1].time;
-        this.beat_ms = tot / num_bangs;
+    let mult = 0;
+    let offby;
+    let delta = (this.bangs.length == 0) ? 0 : bang_tm - this.bangs[this.bangs.length-1].time;
+    let tot = 0;
+    let count = 0;
+    let mini = this.bangs.length - avg_bangs;
+    for (let i = this.bangs.length-1; i > 0 && i >= mini; --i) {
+        if (this.bangs[i].bad || this.bangs[i-1].bad) continue;
+        tot += (this.bangs[i].time - this.bangs[i-1].time) * this.bangs[i].mult;
+        ++count;
+    }
+    if (count == 0) {
+        mult = 1;
+        offby = 0;
+    } else {
+        this.beat_ms = tot / count;
         let mults = [ 1, .5, .25, 2, 3, 4 ];
-        let small = this.beat_ms/16;
         for (let m = 0; m < mults.length; ++m) {
-            let m1 = mults[m];
-            let diff = dur - this.beat_ms*m1;
-            if (Math.abs(diff) < small) {
-                mult = m1;
+            let diff = delta - (this.beat_ms * mults[m]);
+            if (Math.abs(diff) < this.beat_ms/12) {
+                mult = mults[m];
                 offby = diff;
                 break;
             }
@@ -78,9 +84,15 @@ add(bang_tm) {
         if (mult > 1) {
             let tm = this.bangs[this.bangs.length-1].time;
             for (let i = 0; i < mult-1; ++i) {
-                tm += dur/mult;
+                tm += delta/mult;
                 this.push_info(tm, 1, 0, true);
             }
+            mult = 1;
+            offby = (bang_tm - tm) - this.beat_ms;
+        }
+        if (mult == 0) { // he's way off
+            mult = 1;
+            offby = delta - this.beat_ms;
         }
     }
     this.push_info(bang_tm, 1/mult, offby, false);
@@ -89,9 +101,16 @@ add(bang_tm) {
 }
 push_info(tm, mult, offby, fake) {
     let frac = offby / max_offby;
-    if (frac > 1) frac = 1;
-    if (frac < -1) frac = -1;
-    this.bangs.push({ time:tm, mult:mult, offby:offby, frac:frac, fake:fake });
+    let bad = false;
+    if (frac > 1) {
+        frac = 1;
+        bad = true;
+    }
+    if (frac < -1) {
+        frac = -1;
+        bad = true;
+    }
+    this.bangs.push({ time:tm, mult:mult, offby:offby, frac:frac, fake:fake, bad:bad });
 }
 }; // class Bangs
 
@@ -184,29 +203,47 @@ function draw_ui(ctx, cw, ch) {
     let lr = font_size/3;
     draw_bang_light(ctx, xmargin+lr, ymargin+lr, lr);
 
-    let midy = ch / 2;
-    let maxy = midy - ymargin;
+    let staffh = ch * 0.2;
     let gw = cw - panelw - 2*xmargin;
-    let bw = 8;
-    let x = xmargin + panelw;
-    draw_grid(ctx, x, midy, 0, csh2, 0, maxy/4, gw, 0);
-
     let xstep = gw / (max_bangs-1);
+    let bw = 8;
+    let noter = xstep * .35;
+    let notey = staffh - 3*noter;
+    let midy = staffh + (ch-staffh)/2;
+    let maxv = ch - midy - ymargin;
+    let x = xmargin + panelw;
+    draw_grid(ctx, x, midy, 0, csh2, 0, maxv/4, gw, 0);
+
     for (let i = 1; i < bangs.count(); ++i, x += xstep) {
         let info = bangs.info(i);
         let color = bang_color(info.frac);
-        let bh = maxy * info.frac;
+        let bh = maxv * info.frac;
         let offby = Math.floor(info.offby).toString();
-        let m = measure_text(ctx, offby, Math.floor(csh2*1.5), "monospace");
+        let m = measure_text(ctx, offby, Math.floor(csh2*1.2), "monospace");
         draw_text(ctx, offby, x, midy, white_color);
         if (bh < 0) {
             draw_rect(ctx, x, midy+bh-csh2, bw, -bh, color);
         } else {
             draw_rect(ctx, x, midy+csh2, bw, bh, color);
         }
+        draw_note(ctx, x+bw/2, notey, noter, ymargin, info.bad ? grey_color : color, info.mult, xstep, info.fake);
     }
 }
-
+function draw_note(ctx, x, y, r, ymargin, color, mult, xstep, fake) {
+    let sw = r/2;
+    let sh = y - ymargin;
+    draw_rect(ctx, x+r-sw, ymargin, sw, sh, color);
+    draw_circle(ctx, x, y, r, color);
+    if (fake) draw_circle(ctx, x, y, r*.7, black_color);
+    let rx = x+r-xstep;
+    let ry = ymargin;
+    let rh = (y-r-ymargin)/6;
+    let bars = (mult == 2) ? 2 : (mult == 4) ? 3 : 1;
+    for (let i = 0; i < bars; ++i) {
+        draw_rect(ctx, rx+1, ry, xstep-1, rh, color);
+        ry += rh * 1.25;
+    }
+}
 function draw_grid(ctx,x,y,xi,yi,dxi,dyi,gw,gh) {
     draw_rect(ctx, x+xi, y+yi, gw?gw:1, gh?gh:1, major_grid_color);
     draw_rect(ctx, x-xi, y-yi, gw?gw:1, gh?gh:1, major_grid_color);
