@@ -8,6 +8,7 @@
 
 <canvas id="canvas" width="1" height="1"></canvas>
 
+
 <script>
 
 const avg_bangs          = 10;
@@ -18,9 +19,10 @@ const max_offby          = 40;
 const bang_light_dur     = 17;
 const black_color        = "#000000";
 const white_color        = "#ffffff";
-const grey_color         = "#303030";
+const bad_color          = "#ff0000";
 const major_grid_color   = "#989898"
 const minor_grid_color   = "#707070"
+const sheader_h          = 60;
 
 var audioContext = null;
 var reset_time = now();
@@ -191,7 +193,8 @@ function draw() {
 
 function draw_ui(ctx, cw, ch) {
     let xmargin = Math.floor(cw / 40);
-    let ymargin = Math.floor(ch / 40);
+    let ybmargin = Math.floor(ch / 40);
+    let ytmargin = ybmargin;
     let font_size = Math.floor(ch/6);
     let csh2 = Math.floor(ch/50); // center strip
     let m = measure_text(ctx, "888.8a", font_size, "Arial");
@@ -201,16 +204,16 @@ function draw_ui(ctx, cw, ch) {
     let y = (ch+m.height)/2; 
     draw_text(ctx, bpm, xmargin, y, white_color);
     let lr = font_size/3;
-    draw_bang_light(ctx, xmargin+lr, ymargin+lr, lr);
+    draw_bang_light(ctx, xmargin+lr, ytmargin+lr, lr);
 
-    let staffh = ch * 0.2;
+    let staffh = ch * 0.35;
     let gw = cw - panelw - 2*xmargin;
     let xstep = gw / (max_bangs-1);
     let bw = 8;
     let noter = xstep * .35;
     let notey = staffh - 3*noter;
     let midy = staffh + (ch-staffh)/2;
-    let maxv = ch - midy - ymargin;
+    let maxv = ch - midy - ybmargin;
     let x = xmargin + panelw;
     draw_grid(ctx, x, midy, 0, csh2, 0, maxv/4, gw, 0);
 
@@ -226,23 +229,34 @@ function draw_ui(ctx, cw, ch) {
         } else {
             draw_rect(ctx, x, midy+csh2, bw, bh, color);
         }
-        draw_note(ctx, x+bw/2, notey, noter, ymargin, info.bad ? grey_color : color, info.mult, xstep, info.fake);
+        draw_note(ctx, x+bw/2, notey, noter, ytmargin, color, xstep, info.mult, info.bad, info.fake);
     }
 }
-function draw_note(ctx, x, y, r, ymargin, color, mult, xstep, fake) {
+function draw_note(ctx, x, y, r, ytmargin, color, xstep, mult, bad, fake) {
     let sw = r/2;
-    let sh = y - ymargin;
-    draw_rect(ctx, x+r-sw, ymargin, sw, sh, color);
+    let sh = y - ytmargin;
+    draw_rect(ctx, x+r-sw, ytmargin, sw, sh, color);
     draw_circle(ctx, x, y, r, color);
     if (fake) draw_circle(ctx, x, y, r*.7, black_color);
+    if (bad) draw_cross(ctx, x, y, r, black_color);
     let rx = x+r-xstep;
-    let ry = ymargin;
-    let rh = (y-r-ymargin)/6;
+    let ry = ytmargin;
+    let rh = (y-r-ytmargin)/8;
     let bars = (mult == 2) ? 2 : (mult == 4) ? 3 : 1;
     for (let i = 0; i < bars; ++i) {
         draw_rect(ctx, rx+1, ry, xstep-1, rh, color);
-        ry += rh * 1.25;
+        ry += rh * 1.75;
     }
+}
+function draw_cross(ctx, x, y, r, color) {
+    let s = r * Math.sqrt(2);
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.moveTo(x-s, y-s);
+    ctx.lineTo(x+s, y+s);
+    ctx.moveTo(x+s, y-s);
+    ctx.lineTo(x-s, y+s);
+    ctx.stroke();
 }
 function draw_grid(ctx,x,y,xi,yi,dxi,dyi,gw,gh) {
     draw_rect(ctx, x+xi, y+yi, gw?gw:1, gh?gh:1, major_grid_color);
@@ -269,7 +283,11 @@ function draw_bang_light(ctx, x, y, r) {
 }
 
 function bang_color(frac) {
-    return mkcolor(fade({r:0,g:255,b:0}, {r:255,g:0,b:0}, Math.abs(frac)));
+    frac = Math.abs(frac);
+    let c = (frac < .5) ?
+        fade({r:0,g:255,b:0}, {r:255,g:255,b:0}, 2*frac) :
+        fade({r:255,g:255,b:0}, {r:255,g:0,b:0}, 2*frac-1);
+    return mkcolor(c);
 }
 
 function process_audio(e) {
