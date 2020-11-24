@@ -16,7 +16,8 @@ const max_bangs          = 30;
 const bang_limit         = 0.2;
 const shortest_bang      = 120;
 const max_offby          = 40;
-const bang_light_dur     = 17;
+const bang_light_dur     = 60;
+const bang_light_color   = "#2040ff";
 const black_color        = "#000000";
 const white_color        = "#ffffff";
 const bad_color          = "#ff0000";
@@ -199,12 +200,6 @@ function draw_ui(ctx, cw, ch) {
     let csh2 = Math.floor(ch/50); // center strip
     let m = measure_text(ctx, "888.8a", font_size, "Arial");
     let panelw = m.width;
-    let bpm = bangs.bpm().toString();
-    m = measure_text(ctx, bpm, font_size);
-    let y = (ch+m.height)/2; 
-    draw_text(ctx, bpm, xmargin, y, white_color);
-    let lr = font_size/3;
-    draw_bang_light(ctx, xmargin+lr, ytmargin+lr, lr);
 
     let staffh = ch * 0.35;
     let gw = cw - panelw - 2*xmargin;
@@ -214,16 +209,28 @@ function draw_ui(ctx, cw, ch) {
     let notey = staffh - 3*noter;
     let midy = staffh + (ch-staffh)/2;
     let maxv = ch - midy - ybmargin;
+
+    let bpm = bangs.bpm().toString();
+    m = measure_text(ctx, bpm, font_size);
+    let y = (notey+m.height)/2; 
+    draw_text(ctx, bpm, xmargin, y, white_color);
+    let lr = font_size*.4;
+    draw_bang_light(ctx, xmargin+panelw/2, midy-maxv*.7, lr);
+
     let x = xmargin + panelw;
     draw_grid(ctx, x, midy, 0, csh2, 0, maxv/4, gw, 0);
 
+    if (bangs.count() > 1) {
+        let info = bangs.info(bangs.count()-1);
+        let offby = Math.floor(info.offby).toString();
+        if (offby.substr(0,1) != '-') offby = '+' + offby;
+        let m = measure_text(ctx, offby, font_size*.8, "monospace");
+        draw_text(ctx, offby, x-m.width-panelw*.15, midy+m.height/2, bang_color(info.frac));
+    }
     for (let i = 1; i < bangs.count(); ++i, x += xstep) {
         let info = bangs.info(i);
         let color = bang_color(info.frac);
         let bh = maxv * info.frac;
-        let offby = Math.floor(info.offby).toString();
-        let m = measure_text(ctx, offby, Math.floor(csh2*1.2), "monospace");
-        draw_text(ctx, offby, x, midy, white_color);
         if (bh < 0) {
             draw_rect(ctx, x, midy+bh-csh2, bw, -bh, color);
         } else {
@@ -280,6 +287,7 @@ function draw_grid(ctx,x,y,xi,yi,dxi,dyi,gw,gh) {
 function draw_bang_light(ctx, x, y, r) {
     if (now() - bangs.most_recent() > bang_light_dur) return;
     draw_circle(ctx, x, y, r, white_color);
+    draw_circle(ctx, x, y, r*.8, bang_light_color);
 }
 
 function bang_color(frac) {
